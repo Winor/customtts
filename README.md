@@ -22,7 +22,7 @@ Click 'Read Selected Text' in the context menu after highlighting text.
 
 Instructions:    
 - You can change the API URL, API key, speed and voice by clicking the extension icon in the toolbar.  
-- If no checkbox is checked, it will generate the whole audio before starting playback.  
+- If no checkbox is checked, it will generate the audio sentence by sentence during playback. Credits to [sagesound](https://github.com/sagesound) for improving the code.
 - The streaming mode is the prefered way of using the extension. Credits to [rampadc](https://github.com/rampadc/) for fixing the code.  
 - The download mode will provide an mp3 file.  
 
