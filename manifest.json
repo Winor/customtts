@@ -4,10 +4,10 @@
   "author": "BassGaming",
   "description": "TTS implementation for the OpenAI api format. Click 'Read Selected Text' in the context menu after highlighting text.",
   "version": "1.4.1",
-  "permissions": ["storage", "contextMenus", "activeTab", "tabs", "webRequest", "webRequestBlocking", "downloads", "<all_urls>"],
-  "content_security_policy": "default-src 'self' https:; connect-src https:;",
+  "permissions": ["storage", "contextMenus", "activeTab", "tabs", "downloads"],
+  "content_security_policy": "default-src 'self'; style-src 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* http://host.docker.internal:* https:;",
   "background": {
-    "scripts": ["background.js"],
+    "scripts": ["shared/config.js", "shared/notifications.js", "background.js"],
     "persistent": true
   },
   "options_ui": {

@@ -1,3 +1,19 @@
+// Import configuration
+// Note: config.js and notifications.js need to be loaded in manifest.json
+
+/**
+ * @typedef {Object} AppState
+ * @property {string} apiUrl
+ * @property {string} apiKey
+ * @property {number} speechSpeed
+ * @property {string} voice
+ * @property {string} model
+ * @property {boolean} streamingMode
+ * @property {boolean} downloadMode
+ * @property {boolean} isMobile
+ */
+
+// Settings state
 let apiUrl = "";
 let apiKey = "";
 let speechSpeed = 1.0;
@@ -5,18 +21,20 @@ let voice = "af_bella+af_sky";
 let model = "kokoro";
 let streamingMode = false;
 let downloadMode = false;
-let currentAudio = null;
 let isMobile = false;
-let gainNode = null;
 
+// Audio playback state
+let currentAudio = null;
+let audioContext = null;
+let gainNode = null;
+let pcmStreamStopped = false;
+let pcmPlaybackTime = 0;
+
+// Queue management
 let audioQueue = [];
 let isPlaying = false;
 let stopRequested = false;
 let currentAbortController = null;
-
-let audioContext = null;
-let pcmStreamStopped = false;
-let pcmPlaybackTime = 0;
 
 browser.runtime.getPlatformInfo().then((info) => {
   isMobile = info.os === "android";
@@ -50,18 +68,28 @@ function handleMobileClick(tab) {
     });
 }
 
-browser.storage.local
-  .get(["apiUrl", "apiKey", "speechSpeed", "voice", "model", "streamingMode", "downloadMode", "outputVolume"])
-  .then((data) => {
-    apiUrl = data.apiUrl || "http://host.docker.internal:8880/v1";
-    apiKey = data.apiKey || "not-needed";
-    speechSpeed = data.speechSpeed || 1.0;
-    voice = data.voice || "af_bella+af_sky";
-    model = data.model || "kokoro";
+/**
+ * Initialize settings from storage
+ */
+(async function initializeSettings() {
+  try {
+    const data = await browser.storage.local.get([
+      "apiUrl", "apiKey", "speechSpeed", "voice", 
+      "model", "streamingMode", "downloadMode", "outputVolume"
+    ]);
+    
+    apiUrl = data.apiUrl || CONFIG.DEFAULT_API_URL;
+    apiKey = data.apiKey || CONFIG.DEFAULT_API_KEY;
+    speechSpeed = data.speechSpeed || CONFIG.DEFAULT_SPEED;
+    voice = data.voice || CONFIG.DEFAULT_VOICE;
+    model = data.model || CONFIG.DEFAULT_MODEL;
     streamingMode = data.streamingMode || false;
     downloadMode = data.downloadMode || false;
-    if (gainNode) gainNode.gain.value = data.outputVolume ?? 1;
-  });
+    if (gainNode) gainNode.gain.value = data.outputVolume ?? CONFIG.DEFAULT_VOLUME;
+  } catch (error) {
+    console.error('Failed to initialize settings:', error);
+  }
+})();
 
 browser.storage.onChanged.addListener((changes) => {
   if (changes.apiUrl) apiUrl = changes.apiUrl.newValue;
@@ -126,22 +154,33 @@ browser.contextMenus.onClicked.addListener((info) => {
   }
 });
 
+/**
+ * Split text into sentences for processing
+ * Handles English (.), Chinese (。), and line breaks (\n)
+ * @param {string} text - Text to split
+ * @returns {string[]} Array of sentences
+ */
 function splitTextIntoSentences(text) {
-  // english dot+space, chinese dot, linefeed
-  const regex = /[^.。\n]*[.。\n]|[^.。\n]+$/g;
-  let match;
   const sentences = [];
+  let match;
   
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = CONFIG.SENTENCE_REGEX.exec(text)) !== null) {
     const sentence = match[0].trim();
     if (sentence) {
       sentences.push(sentence);
     }
   }
   
+  // Reset regex lastIndex for reuse
+  CONFIG.SENTENCE_REGEX.lastIndex = 0;
+  
   return sentences;
 }
 
+/**
+ * Play next audio in queue
+ * @returns {Promise<void>}
+ */
 async function playNextAudio() {
   if (isPlaying || audioQueue.length === 0) {
     return;
@@ -152,10 +191,10 @@ async function playNextAudio() {
   
   try {
     currentAudio = new Audio(audioUrl);
-    const storedVolume = (await browser.storage.local.get("outputVolume")).outputVolume ?? 1;
+    const storedVolume = (await browser.storage.local.get("outputVolume")).outputVolume ?? CONFIG.DEFAULT_VOLUME;
     currentAudio.volume = storedVolume;
     
-    currentAudio.play();
+    await currentAudio.play();
     
     currentAudio.onended = () => {
       URL.revokeObjectURL(audioUrl);
@@ -163,14 +202,28 @@ async function playNextAudio() {
       isPlaying = false;
       playNextAudio();
     };
+    
+    currentAudio.onerror = (error) => {
+      logError('AUDIO_PLAYBACK', error);
+      URL.revokeObjectURL(audioUrl);
+      currentAudio = null;
+      isPlaying = false;
+      playNextAudio();
+    };
   } catch (error) {
-    console.error("Error playing audio:", error);
+    logError('AUDIO_PLAYBACK', error);
     URL.revokeObjectURL(audioUrl);
     isPlaying = false;
     playNextAudio();
   }
 }
 
+/**
+ * Fetch audio for a single sentence
+ * @param {string} sentence - Text to convert to speech
+ * @param {AbortSignal} signal - Abort signal for cancellation
+ * @returns {Promise<string>} Object URL for audio blob
+ */
 async function fetchSentenceAudio(sentence, signal) {
   const payload = {
     model: model,
@@ -189,21 +242,35 @@ async function fetchSentenceAudio(sentence, signal) {
     ? apiUrl + "audio/speech"
     : apiUrl + "/audio/speech";
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: headers,
-    body: JSON.stringify(payload),
-    signal: signal,
-  });
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(payload),
+      signal: signal,
+    });
 
-  if (!response.ok) {
-    throw new Error(`API request failed with status: ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`API request failed with status: ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw error; // Don't log aborted requests
+    }
+    logError('API_REQUEST', error);
+    throw error;
   }
-
-  const blob = await response.blob();
-  return URL.createObjectURL(blob);
 }
 
+/**
+ * Process selected text and generate speech
+ * @param {string} text - Text to convert to speech
+ */
 function processText(text) {
   if (!apiUrl) return;
 
@@ -255,11 +322,18 @@ function processText(text) {
       signal: controller.signal,
     })
       .then((response) => {
-        if (!response.ok)
-          throw new Error(`API request failed with status: ${response.status}`);
+        if (!response.ok) {
+          const error = new Error(`API request failed with status: ${response.status}`);
+          error.status = response.status;
+          throw error;
+        }
         return processPCMStream(response);
       })
-      .catch(() => {});
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          logError('API_REQUEST', error);
+        }
+      });
   } 
   else if (downloadMode) {
     if (isMobile) {
@@ -292,8 +366,11 @@ function processText(text) {
         signal: controller.signal,
       })
         .then((response) => {
-          if (!response.ok)
-            throw new Error(`API request failed with status: ${response.status}`);
+          if (!response.ok) {
+            const error = new Error(`API request failed with status: ${response.status}`);
+            error.status = response.status;
+            throw error;
+          }
           return response.blob();
         })
         .then(async (blob) => {
@@ -312,12 +389,16 @@ function processText(text) {
             saveAs: true
           });
         })
-        .catch(() => {});
+        .catch((error) => {
+          if (error.name !== 'AbortError') {
+            logError('API_REQUEST', error);
+          }
+        });
     }
   } 
   // split text mode
   else {
-    const TEXT_LENGTH_THRESHOLD = 200;
+    const TEXT_LENGTH_THRESHOLD = CONFIG.TEXT_LENGTH_THRESHOLD;
     
     if (text.length > TEXT_LENGTH_THRESHOLD) {
       const sentences = splitTextIntoSentences(text);
@@ -333,7 +414,10 @@ function processText(text) {
             audioQueue.push(audioUrl);
             playNextAudio(); 
           } catch (error) {
-            console.error("Error processing sentence:", error);
+            if (error.name !== 'AbortError') {
+              console.error("Error processing sentence:", error);
+              // Continue with next sentence instead of stopping completely
+            }
           }
         }
         currentAbortController = null;
@@ -375,11 +459,15 @@ function processText(text) {
         .then(async (blob) => {
           const url = URL.createObjectURL(blob);
           currentAudio = new Audio(url);
-          const storedVolume = (await browser.storage.local.get("outputVolume")).outputVolume ?? 1;
+          const storedVolume = (await browser.storage.local.get("outputVolume")).outputVolume ?? CONFIG.DEFAULT_VOLUME;
           currentAudio.volume = storedVolume;
-          currentAudio.play();
+          await currentAudio.play();
         })
-        .catch(() => {});
+        .catch((error) => {
+          if (error.name !== 'AbortError') {
+            logError('API_REQUEST', error);
+          }
+        });
     }
   }
 }
@@ -483,9 +571,14 @@ function processMobileDownload(text) {
   });
 }
 
+/**
+ * Process PCM audio stream for low-latency playback
+ * @param {Response} response - Fetch response with PCM stream
+ * @returns {Promise<void>}
+ */
 async function processPCMStream(response) {
-  const sampleRate = 24000;
-  const numChannels = 1;
+  const sampleRate = CONFIG.PCM_SAMPLE_RATE;
+  const numChannels = CONFIG.PCM_NUM_CHANNELS;
 
   if (audioContext) {
     audioContext.close();
@@ -495,7 +588,7 @@ async function processPCMStream(response) {
     sampleRate: sampleRate,
   });
 
-  const storedVolume = (await browser.storage.local.get("outputVolume")).outputVolume ?? 1;
+  const storedVolume = (await browser.storage.local.get("outputVolume")).outputVolume ?? CONFIG.DEFAULT_VOLUME;
   gainNode = audioContext.createGain();
   gainNode.gain.value = storedVolume;
   gainNode.connect(audioContext.destination);
@@ -517,7 +610,7 @@ async function processPCMStream(response) {
       pcmData.set(leftover, 0);
       pcmData.set(value, leftover.length);
 
-      const bytesPerSample = 2;
+      const bytesPerSample = CONFIG.PCM_BYTES_PER_SAMPLE;
       const totalSamples = Math.floor(
         pcmData.length / bytesPerSample / numChannels,
       );
@@ -560,5 +653,11 @@ async function processPCMStream(response) {
     leftover = new Uint8Array(0);
   }
 
-  readAndPlay().catch(() => {});
+  try {
+    await readAndPlay();
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      logError('AUDIO_PLAYBACK', error);
+    }
+  }
 }
