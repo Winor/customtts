@@ -30,13 +30,40 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Stop playback
   elements.stopButton.addEventListener("click", handleStopPlayback);
 
-  // Dummy controls for play/pause (not implemented yet)
-  elements.playButton.addEventListener("click", () => {
-    console.info("Play not implemented yet.");
+  async function updateTransportState() {
+    try {
+      const { playbackState } = (await browser.runtime.sendMessage({ action: "getPlaybackState" })) || { playbackState: "idle" };
+      setTransportButtons(playbackState);
+    } catch (e) {
+      setTransportButtons("idle");
+    }
+  }
+
+  function setTransportButtons(state) {
+    const playDisabled = state !== "paused";
+    const pauseDisabled = state !== "playing";
+    const stopDisabled = state === "idle";
+    elements.playButton.disabled = playDisabled;
+    elements.pauseButton.disabled = pauseDisabled;
+    elements.stopButton.disabled = stopDisabled;
+  }
+
+  // Stop playback
+  elements.stopButton.addEventListener("click", async () => {
+    await browser.runtime.sendMessage({ action: "stopPlayback" });
+    setTransportButtons("idle");
   });
 
-  elements.pauseButton.addEventListener("click", () => {
-    console.info("Pause not implemented yet.");
+  // Play (resume)
+  elements.playButton.addEventListener("click", async () => {
+    await browser.runtime.sendMessage({ action: "resumePlayback" });
+    await updateTransportState();
+  });
+
+  // Pause
+  elements.pauseButton.addEventListener("click", async () => {
+    await browser.runtime.sendMessage({ action: "pausePlayback" });
+    await updateTransportState();
   });
 
   // Tab switching
@@ -48,6 +75,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       elements.tabPanels.forEach((panel) => {
         panel.classList.toggle("active", panel.id === `${targetTab}Tab`);
       });
+
+      if (targetTab === "play") {
+        updateTransportState();
+      }
     });
   });
+
+  // Initial transport state
+  updateTransportState();
 });

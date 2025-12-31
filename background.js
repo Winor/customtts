@@ -29,12 +29,17 @@ let audioContext = null;
 let gainNode = null;
 let pcmStreamStopped = false;
 let pcmPlaybackTime = 0;
+let playbackState = "idle"; // idle | playing | paused
 
 // Queue management
 let audioQueue = [];
 let isPlaying = false;
 let stopRequested = false;
 let currentAbortController = null;
+
+function setPlaybackState(state) {
+  playbackState = state;
+}
 
 browser.runtime.getPlatformInfo().then((info) => {
   isMobile = info.os === "android";
@@ -110,6 +115,7 @@ browser.runtime.onMessage.addListener((message) => {
     audioQueue.forEach(url => URL.revokeObjectURL(url));
     audioQueue = [];
     isPlaying = false;
+    setPlaybackState("idle");
     
     if (currentAbortController) {
       currentAbortController.abort();
@@ -124,6 +130,30 @@ browser.runtime.onMessage.addListener((message) => {
       currentAudio.pause();
       currentAudio = null;
     }
+  }
+
+  if (message.action === "pausePlayback") {
+    if (streamingMode && audioContext && playbackState === "playing") {
+      audioContext.suspend().catch(() => {});
+      setPlaybackState("paused");
+    } else if (currentAudio && !currentAudio.paused) {
+      currentAudio.pause();
+      setPlaybackState("paused");
+    }
+  }
+
+  if (message.action === "resumePlayback") {
+    if (streamingMode && audioContext && playbackState === "paused") {
+      audioContext.resume().catch(() => {});
+      setPlaybackState("playing");
+    } else if (currentAudio && currentAudio.paused) {
+      currentAudio.play().catch(() => {});
+      setPlaybackState("playing");
+    }
+  }
+
+  if (message.action === "getPlaybackState") {
+    return Promise.resolve({ playbackState });
   }
 });
 
@@ -187,6 +217,7 @@ async function playNextAudio() {
   }
   
   isPlaying = true;
+  setPlaybackState("playing");
   const audioUrl = audioQueue.shift();
   
   try {
@@ -200,6 +231,9 @@ async function playNextAudio() {
       URL.revokeObjectURL(audioUrl);
       currentAudio = null;
       isPlaying = false;
+      if (audioQueue.length === 0) {
+        setPlaybackState("idle");
+      }
       playNextAudio();
     };
     
@@ -208,12 +242,18 @@ async function playNextAudio() {
       URL.revokeObjectURL(audioUrl);
       currentAudio = null;
       isPlaying = false;
+      if (audioQueue.length === 0) {
+        setPlaybackState("idle");
+      }
       playNextAudio();
     };
   } catch (error) {
     logError('AUDIO_PLAYBACK', error);
     URL.revokeObjectURL(audioUrl);
     isPlaying = false;
+    if (audioQueue.length === 0) {
+      setPlaybackState("idle");
+    }
     playNextAudio();
   }
 }
@@ -315,6 +355,7 @@ function processText(text) {
     const controller = new AbortController();
     currentAbortController = controller;
 
+    setPlaybackState("playing");
     fetch(endpoint, {
       method: "POST",
       headers: headers,
@@ -461,6 +502,7 @@ function processText(text) {
           currentAudio = new Audio(url);
           const storedVolume = (await browser.storage.local.get("outputVolume")).outputVolume ?? CONFIG.DEFAULT_VOLUME;
           currentAudio.volume = storedVolume;
+          setPlaybackState("playing");
           await currentAudio.play();
         })
         .catch((error) => {
@@ -579,6 +621,7 @@ function processMobileDownload(text) {
 async function processPCMStream(response) {
   const sampleRate = CONFIG.PCM_SAMPLE_RATE;
   const numChannels = CONFIG.PCM_NUM_CHANNELS;
+  setPlaybackState("playing");
 
   if (audioContext) {
     audioContext.close();

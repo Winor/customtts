@@ -93,11 +93,10 @@
 
             #stopButton {
                 color: #ff5252;
-                border-color: #ff5252;
             }
 
             #stopButton:hover {
-                background-color: #ff5252;
+                border-color: #ff5252;
                 color: #1a1a1a;
             }
 
@@ -163,6 +162,16 @@
             .icon-button:hover {
                 border-color: #00bcd4;
                 box-shadow: 0 0 0 1px rgba(0, 188, 212, 0.15);
+            }
+
+            .icon-button:disabled {
+                opacity: 0.3;
+                cursor: not-allowed;
+            }
+
+            .icon-button:disabled:hover {
+                border-color: #404040;
+                box-shadow: none;
             }
 
             .icon-button svg {
