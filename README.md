@@ -35,10 +35,10 @@ Android:
 To read text: Mark text -> click the three option dots -> Extensions -> Custom TTS Reader  
 To access settings: Click the three option dots -> Extensions -> Extension Manager -> Custom TTS Reader -> Settings
 
-Credits:
-[Winor](https://github.com/Winor) for refactoring the code, improving the UI and more.
-[sagesound](https://github.com/sagesound) for improving the non-streaming logic.
-[rampadc](https://github.com/rampadc/) for fixing the streaming code.
+Credits:  
+[Winor](https://github.com/Winor) for refactoring the code, improving the UI and more.  
+[sagesound](https://github.com/sagesound) for improving the non-streaming logic.  
+[rampadc](https://github.com/rampadc/) for fixing the streaming code.  
 
 Note:
 This is just a quick implementation since I couldn't find a similar extension where you could use your own API endpoint anywhere. I am not a developer. The code might be jank, but it works. Feel free to improve it... or not :)
